@@ -78,15 +78,19 @@ def classify(trace: dict) -> str:
     """
     retrieved_ids = [chunk["id"] for chunk in trace["retrieved"]]
 
+    retrieved_ids = [chunk["id"] for chunk in trace["retrieved"]]
+
     # TODO Rule 1 -- retrieval: is the gold chunk missing from retrieved_ids?
+    if trace["gold_chunk"] not in retrieved_ids: return "retrieval"
 
     # TODO Rule 2 -- context: was it retrieved but missing from in_context?
+    if trace["gold_chunk"] not in trace["in_context"]: return "context"
 
     # TODO Rule 3 -- generation: did it reach the model but the answer lacks gold_fact?
+    if trace["gold_fact"] not in trace["answer"]: return "generation"
 
     # TODO Rule 4 -- operations: the answer is right, so look at the system around it.
-
-    return ""
+    return "operations"
 
 
 if __name__ == "__main__":
