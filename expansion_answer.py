@@ -7,16 +7,21 @@ from dotenv import load_dotenv
 from pypdf import PdfReader
 import umap
 
+
+################################################################################################
+### Setup 
+################################################################################################
 # Load environment variables from .env file
 load_dotenv()
 
 openai_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=openai_key)
 
+################################################################################################
+### Extract Text from PDF & filter empty strings
+################################################################################################
 reader = PdfReader("data/microsoft-annual-report.pdf")
 pdf_texts = [p.extract_text().strip() for p in reader.pages]
-
-# Filter the empty strings
 pdf_texts = [text for text in pdf_texts if text]
 # print(
 #     word_wrap(
@@ -25,22 +30,32 @@ pdf_texts = [text for text in pdf_texts if text]
 #     )
 # )
 
-# split the text into smaller chunks
 
-
-from langchain.text_splitter import (
+################################################################################################
+### Split the text into chunks
+################################################################################################
+from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
     SentenceTransformersTokenTextSplitter,
 )
 
+# Define how to split the text:
+#   - Split the text into smaller chunks using character and token based splitters
+#   - First splits by paragraph, then by sentences, and finally by tokens
 character_splitter = RecursiveCharacterTextSplitter(
     separators=["\n\n", "\n", ". ", " ", ""], chunk_size=1000, chunk_overlap=0
 )
-character_split_texts = character_splitter.split_text("\n\n".join(pdf_texts))
 
+# use the character splitter to split the pdf text into smaller chunks
+character_split_texts = character_splitter.split_text("\n\n".join(pdf_texts))
 # print(word_wrap(character_split_texts[10]))
 # print(f"\nTotal chunks: {len(character_split_texts)}")
+# returns 410 chunks
 
+
+################################################################################################
+### Split chunks into maximum token size, as LLMs have token limits
+################################################################################################
 token_splitter = SentenceTransformersTokenTextSplitter(
     chunk_overlap=0, tokens_per_chunk=256
 )
@@ -50,27 +65,32 @@ for text in character_split_texts:
 
 # print(word_wrap(token_split_texts[10]))
 # print(f"\nTotal chunks: {len(token_split_texts)}")
+# Total chunks after token splitting = 419, (increased from 410)
 
+################################################################################################
+### Use chrome db to to create vectors and then store them in the collection
+################################################################################################
 
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
+# Define the embedding function for the Chroma database
 embedding_function = SentenceTransformerEmbeddingFunction()
 # print(embedding_function([token_split_texts[10]]))
 
+# Define the Chroma client and collection
 chroma_client = chromadb.Client()
 chroma_collection = chroma_client.create_collection(
     "microsoft-collection", embedding_function=embedding_function
 )
 
-# extract the embeddings of the token_split_texts
+# chrome creates vector embeddings for the token_split_texts then stores them in the collection
 ids = [str(i) for i in range(len(token_split_texts))]
 chroma_collection.add(ids=ids, documents=token_split_texts)
-chroma_collection.count()
+chroma_collection.count() # returns 419, the total number of vectors stored in the collection
 
+# test chroma collection with a query
 query = "What was the total revenue for the year?"
-
-
 results = chroma_collection.query(query_texts=[query], n_results=5)
 retrieved_documents = results["documents"][0]
 
@@ -78,6 +98,10 @@ retrieved_documents = results["documents"][0]
 #     print(word_wrap(document))
 #     print("\n")
 
+
+################################################################################################
+###  Generate hypothetical answer (hullicination) using original query without any context
+################################################################################################
 
 def augment_query_generated(query, model="gpt-5.6-luna"):
     prompt = """You are a helpful expert financial research assistant. 
@@ -97,23 +121,31 @@ def augment_query_generated(query, model="gpt-5.6-luna"):
     content = response.choices[0].message.content
     return content
 
-
+################################################################################################
+###  Join original query with hypothetical answer (hullicination) and 
+################################################################################################
 original_query = "What was the total profit for the year, and how does it compare to the previous year?"
 hypothetical_answer = augment_query_generated(original_query)
 
 joint_query = f"{original_query} {hypothetical_answer}"
 print(word_wrap(joint_query))
 
+
+################################################################################################
+###  Query Results: Query database using joint query
+################################################################################################
 results = chroma_collection.query(
     query_texts=joint_query, n_results=5, include=["documents", "embeddings"]
 )
 retrieved_documents = results["documents"][0]
 
-
 # for doc in retrieved_documents:
 #     print(word_wrap(doc))
 #     print("")
 
+################################################################################################
+###  Project data in a nice graph / presentation
+################################################################################################
 embeddings = chroma_collection.get(include=["embeddings"])["embeddings"]
 umap_transform = umap.UMAP(random_state=0, transform_seed=0).fit(embeddings)
 projected_dataset_embeddings = project_embeddings(embeddings, umap_transform)
